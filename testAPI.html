@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>高德地图 API 凭证验证工具</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #f0f2f5;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .card {
+            background: #fff;
+            border-radius: 12px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.1);
+            padding: 32px;
+            width: 100%;
+            max-width: 520px;
+        }
+        h1 {
+            font-size: 20px;
+            color: #1a1a2e;
+            margin-bottom: 24px;
+            text-align: center;
+        }
+        h1 span { color: #1890ff; }
+        .form-group {
+            margin-bottom: 18px;
+        }
+        label {
+            display: block;
+            font-size: 13px;
+            color: #555;
+            margin-bottom: 6px;
+            font-weight: 500;
+        }
+        input {
+            width: 100%;
+            padding: 11px 14px;
+            border: 1.5px solid #d9d9d9;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: "SFMono-Regular", Consolas, monospace;
+            transition: border-color .2s;
+            outline: none;
+        }
+        input:focus { border-color: #1890ff; box-shadow: 0 0 0 3px rgba(24,144,255,.1); }
+        .hint { font-size: 12px; color: #999; margin-top: 4px; }
+        .btn-row { display: flex; gap: 12px; margin-top: 24px; }
+        button {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all .2s;
+        }
+        button:disabled { opacity: .6; cursor: not-allowed; }
+        #btnVerify {
+            background: #1890ff;
+            color: #fff;
+        }
+        #btnVerify:hover:not(:disabled) { background: #096dd9; }
+        #btnClear {
+            background: #f5f5f5;
+            color: #555;
+        }
+        #btnClear:hover { background: #e8e8e8; }
+        .result-area {
+            margin-top: 24px;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .result-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 12px 16px;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+        .result-item + .result-item { border-top: 1px solid #f0f0f0; }
+        .result-item .icon { flex-shrink: 0; margin-top: 1px; }
+        .result-item.success { background: #f6ffed; color: #389e0d; }
+        .result-item.error   { background: #fff2f0; color: #cf1322; }
+        .result-item.info    { background: #f0f5ff; color: #1d39c4; }
+        .result-item.warn    { background: #fffbe6; color: #d48806; }
+        .result-item .text { flex: 1; }
+        .result-item .text strong { display: block; margin-bottom: 2px; font-weight: 600; }
+        .result-item .text small { color: inherit; opacity: .75; font-size: 12px; }
+        .map-preview {
+            margin-top: 16px;
+            height: 200px;
+            border-radius: 8px;
+            border: 1px solid #e8e8e8;
+            display: none;
+            overflow: hidden;
+        }
+        .spinner {
+            display: inline-block;
+            width: 14px; height: 14px;
+            border: 2px solid rgba(255,255,255,.3);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin .6s linear infinite;
+            vertical-align: middle;
+            margin-right: 6px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h1>高德地图 <span>凭证验证</span></h1>
+
+    <div class="form-group">
+        <label for="apiKey">API Key</label>
+        <input type="text" id="apiKey" placeholder="请输入 Web端(JS API) 的 Key" autocomplete="off" spellcheck="false">
+        <div class="hint">在控制台 → 应用管理 → 我的应用 中获取</div>
+    </div>
+
+    <div class="form-group">
+        <label for="securityCode">安全密钥 (Security JS Code)</label>
+        <input type="text" id="securityCode" placeholder="请输入对应的安全密钥" autocomplete="off" spellcheck="false">
+        <div class="hint">与 Key 配对使用，2021年12月02日后申请的 Key 必须填写</div>
+    </div>
+
+    <div class="btn-row">
+        <button id="btnVerify" onclick="verifyAll()">开始验证</button>
+        <button id="btnClear" onclick="clearAll()">清空</button>
+    </div>
+
+    <div class="result-area" id="resultArea"></div>
+    <div class="map-preview" id="mapPreview"></div>
+</div>
+
+<script>
+// ==================== 全局状态 ====================
+let jsApiLoaded = false;   // JS API 是否加载成功
+let mapInstance = null;    // 地图实例
+
+// ==================== 工具函数 ====================
+function addResult(type, title, detail) {
+    const area = document.getElementById('resultArea');
+    const el = document.createElement('div');
+    el.className = `result-item ${type}`;
+    const icons = { success: '✅', error: '❌', info: 'ℹ️', warn: '⚠️' };
+    el.innerHTML = `
+        <span class="icon">${icons[type] || '•'}</span>
+        <div class="text"><strong>${title}</strong>${detail ? `<small>${detail}</small>` : ''}</div>
+    `;
+    area.appendChild(el);
+}
+
+function clearResults() {
+    document.getElementById('resultArea').innerHTML = '';
+    const preview = document.getElementById('mapPreview');
+    preview.style.display = 'none';
+    preview.innerHTML = '';
+}
+
+function setLoading(loading) {
+    const btn = document.getElementById('btnVerify');
+    btn.disabled = loading;
+    btn.innerHTML = loading ? '<span class="spinner"></span>验证中…' : '开始验证';
+}
+
+// ==================== 核心验证逻辑 ====================
+async function verifyAll() {
+    const key = document.getElementById('apiKey').value.trim();
+    const code = document.getElementById('securityCode').value.trim();
+
+    clearResults();
+
+    // 1. 基本校验
+    if (!key) {
+        addResult('error', '参数缺失', '请输入 API Key');
+        return;
+    }
+
+    setLoading(true);
+
+    try {
+        // 2. 验证 JS API + 安全密钥（通过加载地图 SDK 并初始化地图）
+        await verifyJsApi(key, code);
+
+        // 3. 验证 Web 服务 API（调用一个轻量级接口）
+        await verifyWebService(key);
+    } finally {
+        setLoading(false);
+    }
+}
+
+/**
+ * 验证 JS API 加载与安全密钥
+ * 原理：动态加载高德 JS API Loader，初始化一个地图实例。
+ *       若 Key 无效 → 加载失败；若安全密钥不匹配 → 初始化时抛错。
+ */
+function verifyJsApi(key, securityCode) {
+    return new Promise((resolve) => {
+        // 清理上一次可能残留的配置
+        delete window._AMapSecurityConfig;
+        delete window.AMap;
+        delete window.AMapLoader;
+
+        // 移除旧的 loader script
+        const oldScript = document.getElementById('amap-loader-script');
+        if (oldScript) oldScript.remove();
+
+        // --- 设置安全密钥（必须在加载前设置）---
+        if (securityCode) {
+            window._AMapSecurityConfig = { securityJsCode: securityCode };
+        }
+
+        // --- 动态加载 JS API Loader ---
+        const script = document.createElement('script');
+        script.id = 'amap-loader-script';
+        script.src = 'https://webapi.amap.com/loader.js';
+        script.onload = () => {
+            if (!window.AMapLoader) {
+                addResult('error', 'JS API 加载异常', 'AMapLoader 未定义，请检查网络或 Key 是否被限制');
+                resolve(false);
+                return;
+            }
+            // --- 调用 load 方法 ---
+            window.AMapLoader.load({
+                key: key,
+                version: '2.0',
+                // plugins: ['AMap.Geolocation'] // 可按需添加
+            }).then((AMap) => {
+                // 尝试创建地图实例（最小化 DOM 容器）
+                const container = document.getElementById('mapPreview');
+                container.style.display = 'block';
+                container.innerHTML = '';
+                const mapDiv = document.createElement('div');
+                mapDiv.style.width = '100%';
+                mapDiv.style.height = '200px';
+                container.appendChild(mapDiv);
+
+                try {
+                    mapInstance = new AMap.Map(mapDiv, {
+                        zoom: 5,
+                        center: [116.397, 39.909],
+                    });
+                    addResult('success', 'JS API 加载成功', `Key 有效，安全密钥${securityCode ? '匹配' : '未提供（若已启用安全密钥则会失败）'}`);
+                    jsApiLoaded = true;
+                    resolve(true);
+                } catch (e) {
+                    addResult('error', '地图初始化失败', e.message || '安全密钥可能不匹配或 Key 权限不足');
+                    resolve(false);
+                }
+            }).catch((err) => {
+                // AMapLoader.load 的错误通常包含 INVALID_USER_KEY / INVALID_USER_SCODE
+                const msg = err?.message || err?.info || JSON.stringify(err);
+                addResult('error', 'JS API 加载被拒绝', `错误详情：${msg}`);
+                resolve(false);
+            });
+        };
+        script.onerror = () => {
+            addResult('error', 'JS API 脚本加载失败', '无法从 webapi.amap.com 加载 loader.js，请检查网络');
+            resolve(false);
+        };
+        document.head.appendChild(script);
+    });
+}
+
+/**
+ * 验证 Web 服务 API Key
+ * 原理：调用高德 Web 服务的一个轻量接口（行政区查询）。
+ *       若返回 status:1 则 Key 有效；若返回 10001 则 Key 无效。
+ */
+function verifyWebService(key) {
+    return new Promise((resolve) => {
+        // 使用 JSONP 方式避免跨域（Web服务API支持 callback 参数）
+        const callbackName = 'amap_ws_cb_' + Date.now();
+        window[callbackName] = function(data) {
+            // 清理
+            delete window[callbackName];
+            const script = document.getElementById('amap-ws-script');
+            if (script) script.remove();
+
+            if (data.status === '1') {
+                addResult('success', 'Web 服务 API 可用', `接口返回正常，Key 具有 Web 服务调用权限`);
+            } else {
+                const info = data.info || '未知错误';
+                const infocode = data.infocode || '';
+                if (infocode === '10001') {
+                    addResult('error', 'Web 服务 API Key 无效', `错误码 10001：Key 不正确或已过期`);
+                } else if (infocode === '10002') {
+                    addResult('warn', 'Web 服务 API 权限不足', `错误码 10002：该 Key 未开通 Web 服务 API 或接口权限不匹配`);
+                } else {
+                    addResult('warn', 'Web 服务 API 返回异常', `info=${info}, infocode=${infocode}`);
+                }
+            }
+            resolve();
+        };
+
+        const script = document.createElement('script');
+        script.id = 'amap-ws-script';
+        // 行政区查询接口，消耗配额极低，适合作为验证
+        script.src = `https://restapi.amap.com/v3/config/district?key=${encodeURIComponent(key)}&keywords=中国&subdistrict=0&extensions=base&output=JSON&callback=${callbackName}`;
+        script.onerror = () => {
+            addResult('warn', 'Web 服务 API 请求失败', '网络异常或接口无法访问，无法验证 Web 服务权限');
+            delete window[callbackName];
+            resolve();
+        };
+        document.head.appendChild(script);
+
+        // 超时保护
+        setTimeout(() => {
+            if (window[callbackName]) {
+                delete window[callbackName];
+                const s = document.getElementById('amap-ws-script');
+                if (s) s.remove();
+                addResult('warn', 'Web 服务 API 验证超时', '请检查网络连接');
+                resolve();
+            }
+        }, 8000);
+    });
+}
+
+// ==================== 清空 ====================
+function clearAll() {
+    document.getElementById('apiKey').value = '';
+    document.getElementById('securityCode').value = '';
+    clearResults();
+    delete window._AMapSecurityConfig;
+    delete window.AMap;
+    delete window.AMapLoader;
+    const loaderScript = document.getElementById('amap-loader-script');
+    if (loaderScript) loaderScript.remove();
+    jsApiLoaded = false;
+    mapInstance = null;
+}
+
+// 回车快捷验证
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.isComposing) verifyAll();
+});
+</script>
+
+</body>
+</html>
